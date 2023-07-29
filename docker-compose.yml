@@ -1,0 +1,105 @@
+# set .env vars: TZ, DOMAIN_NAME,  SITE_PATH
+#   OWNCLOUD_VERSION DATABASE_USER DATABASE_PASSWORD VOL_DB VOL_OWNCLOUD ADMIN_USERNAME ADMIN_PASSWORD 
+
+version: "3"
+
+services:
+  owncloud:
+    image: owncloud/server:${OWNCLOUD_VERSION}
+    container_name: owncloud_server
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SITE_PATH}.loadbalancer.server.port=8080
+      - traefik.http.routers.${SITE_PATH}.tls.certresolver=letsencrypt
+      - traefik.frontend.entryPoints=http,https
+      - traefik.http.routers.${SITE_PATH}.rule=Host(`${DOMAIN_NAME}`) #&& ( PathPrefix(`/${SITE_PATH}`) )
+    networks:
+      - proxy_default
+      - redis
+      - mariadb
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      - TZ
+      - OWNCLOUD_DOMAIN=${DOMAIN_NAME}
+      - OWNCLOUD_DB_TYPE=mysql
+      - OWNCLOUD_DB_NAME=owncloud
+      - OWNCLOUD_DB_USERNAME=${DATABASE_USER}
+      - OWNCLOUD_DB_PASSWORD=${DATABASE_PASSWORD}
+      - OWNCLOUD_DB_HOST=mariadb
+      - OWNCLOUD_ADMIN_USERNAME=${ADMIN_USERNAME}
+      - OWNCLOUD_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - OWNCLOUD_MYSQL_UTF8MB4=true
+      - OWNCLOUD_REDIS_ENABLED=true
+      - OWNCLOUD_REDIS_HOST=redis
+    healthcheck:
+      test: ["CMD", "/usr/bin/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - owncloud_data:/mnt/data
+
+  redis:
+    image: redis:6
+    container_name: owncloud_redis
+    restart: unless-stopped
+    command: ["--databases", "1"]
+    environment:
+      - TZ
+      - DOMAIN_NAME
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+    networks:
+      - redis
+
+  mariadb:
+    image: docker.io/bitnami/mariadb:latest
+    container_name: "mariadb"
+    restart: unless-stopped
+    environment:
+      - TZ
+      - DOMAIN_NAME
+      - ALLOW_EMPTY_PASSWORD=yes
+      - MARIADB_RANDOM_ROOT_PASSWORD=yes
+      - MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=yes
+      - MARIADB_USER=${DATABASE_USER}
+      - MARIADB_PASSWORD=${DATABASE_PASSWORD}
+      - MARIADB_DATABASE=owncloud
+      - MARIADB_AUTO_UPGRADE=1
+    #command: ["--max-allowed-packet=128M", "--innodb-log-file-size=64M"]
+    healthcheck:
+      test: mysqladmin ping -h 127.0.0.1 -u $$MARIADB_USER --password=$$MARIADB_PASSWORD
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - 'mariadb_data:/bitnami/mariadb'
+    networks:
+      - mariadb
+
+volumes:
+  mariadb_data:
+     driver_opts:
+           type: none
+           device: ${VOL_DB}
+           o: bind
+  redis_data:
+  owncloud_data:
+     driver_opts:
+           type: none
+           device: ${VOL_OWNCLOUD}
+           o: bind
+
+networks:
+  proxy_default:
+    external: true
+  mariadb:
+  redis:
